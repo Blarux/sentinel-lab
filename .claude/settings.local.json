@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile main.py core/logger.py core/os_detector.py core/__init__.py modules/network_scanner.py modules/firewall_manager.py modules/remediator.py modules/__init__.py)",
+      "Bash(python -c \"import yaml; d=yaml.safe_load\\(open\\('config/threats.yaml','r',encoding='utf-8'\\)\\); print\\('ports:', len\\(d['threat_ports']\\), 'ips:', len\\(d['suspicious_ips']\\), 'protected:', len\\(d['protected_processes']\\)\\)\")",
+      "Bash(pip install *)",
+      "Bash(python -m py_compile main.py modules/network_scanner.py modules/firewall_manager.py)",
+      "Bash(python -m py_compile main.py modules/network_scanner.py modules/firewall_manager.py modules/remediator.py)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

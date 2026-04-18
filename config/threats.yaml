@@ -1,0 +1,70 @@
+# Sentinel-Lab threat database
+# -----------------------------
+# Ports and IP addresses listed here will be flagged during scans.
+# Extend this file as part of your organisation's hardening baseline.
+
+threat_ports:
+  # --- Legacy / plaintext services -----------------
+  - { port: 21,    protocol: tcp,  name: "FTP",           reason: "Plaintext credentials" }
+  - { port: 23,    protocol: tcp,  name: "Telnet",        reason: "Plaintext shell, deprecated" }
+  - { port: 25,    protocol: tcp,  name: "SMTP",          reason: "Open relay risk" }
+  - { port: 69,    protocol: udp,  name: "TFTP",          reason: "No authentication" }
+  - { port: 79,    protocol: tcp,  name: "Finger",        reason: "Information disclosure" }
+  - { port: 110,   protocol: tcp,  name: "POP3",          reason: "Plaintext auth" }
+  - { port: 143,   protocol: tcp,  name: "IMAP",          reason: "Plaintext auth" }
+  - { port: 161,   protocol: udp,  name: "SNMP",          reason: "Default community strings" }
+  - { port: 512,   protocol: tcp,  name: "rexec",         reason: "Deprecated remote exec" }
+  - { port: 513,   protocol: tcp,  name: "rlogin",        reason: "Deprecated remote login" }
+  - { port: 514,   protocol: tcp,  name: "rsh",           reason: "Deprecated remote shell" }
+
+  # --- SMB / NetBIOS (WannaCry, EternalBlue) -------
+  - { port: 135,   protocol: tcp,  name: "MS-RPC",        reason: "DCOM exposure" }
+  - { port: 137,   protocol: udp,  name: "NetBIOS-NS",    reason: "Lateral movement vector" }
+  - { port: 138,   protocol: udp,  name: "NetBIOS-DGM",   reason: "Lateral movement vector" }
+  - { port: 139,   protocol: tcp,  name: "NetBIOS-SSN",   reason: "SMBv1 / EternalBlue" }
+  - { port: 445,   protocol: tcp,  name: "SMB",           reason: "EternalBlue / WannaCry" }
+
+  # --- Remote administration -----------------------
+  - { port: 3389,  protocol: tcp,  name: "RDP",           reason: "Brute force / BlueKeep" }
+  - { port: 5900,  protocol: tcp,  name: "VNC",           reason: "Often unauthenticated" }
+  - { port: 5985,  protocol: tcp,  name: "WinRM-HTTP",    reason: "Plaintext remote mgmt" }
+
+  # --- Databases exposed on the wire ---------------
+  - { port: 1433,  protocol: tcp,  name: "MSSQL",         reason: "DB should not be internet-facing" }
+  - { port: 1521,  protocol: tcp,  name: "Oracle",        reason: "DB should not be internet-facing" }
+  - { port: 3306,  protocol: tcp,  name: "MySQL",         reason: "DB should not be internet-facing" }
+  - { port: 5432,  protocol: tcp,  name: "PostgreSQL",    reason: "DB should not be internet-facing" }
+  - { port: 6379,  protocol: tcp,  name: "Redis",         reason: "Unauthenticated by default" }
+  - { port: 27017, protocol: tcp,  name: "MongoDB",       reason: "Unauthenticated by default" }
+  - { port: 9200,  protocol: tcp,  name: "Elasticsearch", reason: "Unauthenticated by default" }
+
+  # --- Known malware / backdoor ports --------------
+  - { port: 1080,  protocol: tcp,  name: "SOCKS proxy",   reason: "Common exfil channel" }
+  - { port: 4444,  protocol: tcp,  name: "Metasploit",    reason: "Default MSF handler port" }
+  - { port: 5555,  protocol: tcp,  name: "ADB",           reason: "Android Debug Bridge exposed" }
+  - { port: 6667,  protocol: tcp,  name: "IRC",           reason: "Classic botnet C2" }
+  - { port: 12345, protocol: tcp,  name: "NetBus",        reason: "Historical backdoor" }
+  - { port: 31337, protocol: tcp,  name: "Back Orifice",  reason: "Historical backdoor" }
+
+suspicious_ips:
+  # Reserved / documentation ranges should never appear in real traffic
+  - "0.0.0.0"
+  - "169.254.169.254"   # Cloud metadata endpoint - flag if unexpected
+  # Example threat-intel entries (replace with your own feed)
+  - "192.0.2.1"
+  - "198.51.100.7"
+  - "203.0.113.42"
+
+# Protected PIDs and processes that must never be remediated automatically
+protected_processes:
+  - "System"
+  - "Idle"
+  - "svchost.exe"
+  - "lsass.exe"
+  - "winlogon.exe"
+  - "wininit.exe"
+  - "csrss.exe"
+  - "smss.exe"
+  - "systemd"
+  - "init"
+  - "kthreadd"
