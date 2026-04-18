@@ -122,38 +122,94 @@ class NetworkScanner:
             return self._fetch_via_pfctl()
         return self._fetch_via_ufw()
 
+    _PF_BLOCK_LINE = re.compile(r"^\s*block\b", re.IGNORECASE)
+    _PF_PORT_CLAUSE = re.compile(
+        r"\bport\s*(?:=|:)?\s*(?:\{\s*([^}]+?)\s*\}|([\d][\d:\-]*))",
+        re.IGNORECASE,
+    )
+
     def _fetch_via_pfctl(self) -> set[int]:
         if not shutil.which("pfctl"):
             self.logger.debug("pfctl not available on this macOS system")
             return set()
-        cmd = ["pfctl", "-a", "com.sentinel-lab", "-s", "rules"]
-        try:
-            completed = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=10, check=False,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as err:
-            self.logger.warning("pfctl query failed: %s", err)
-            return set()
-
-        stderr = (completed.stderr or "").lower()
-        if "permission denied" in stderr or "operation not permitted" in stderr:
-            self.logger.error(
-                "pfctl enumeration denied - root privileges required (use sudo)."
-            )
-            return set()
 
         ports: set[int] = set()
-        pattern = re.compile(
-            r"block\s+in\s+quick\s+proto\s+(?:tcp|udp).*?port\s+(?:=\s*)?(\d+)",
-            re.IGNORECASE,
+        raw_outputs: list[str] = []
+
+        for anchor in ("com.sentinel-lab", None):
+            cmd = ["pfctl"]
+            if anchor:
+                cmd += ["-a", anchor]
+            cmd += ["-s", "rules"]
+
+            try:
+                completed = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=10, check=False,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+                self.logger.warning("pfctl query failed (anchor=%s): %s", anchor, err)
+                continue
+
+            stderr = (completed.stderr or "").lower()
+            if "permission denied" in stderr or "operation not permitted" in stderr:
+                self.logger.error(
+                    "pfctl enumeration denied - root privileges required (use sudo)."
+                )
+                return set()
+
+            stdout = completed.stdout or ""
+            if stdout.strip():
+                raw_outputs.append(f"[anchor={anchor or 'main'}]\n{stdout}")
+                ports |= self._parse_pfctl_rules(stdout)
+
+        self.logger.debug(
+            "pfctl raw output (%d char):\n%s",
+            sum(len(o) for o in raw_outputs),
+            "\n---\n".join(raw_outputs),
         )
-        for line in (completed.stdout or "").splitlines():
-            match = pattern.search(line)
-            if match:
-                ports.add(int(match.group(1)))
-        self.logger.info("pfctl detected %d Sentinel-blocked port(s)", len(ports))
+        self.logger.info(
+            "pfctl detected %d Sentinel-blocked port(s): %s",
+            len(ports), sorted(ports),
+        )
         if self.debug:
-            print(f"[DEBUG] pfctl Sentinel ports: {sorted(ports)}")
+            print(f"[DEBUG] pfctl Sentinel blocked ports (macOS): {sorted(ports)}")
+            if not ports:
+                print("[DEBUG] pfctl returned no block rules with 'port' clauses. "
+                      "Check 'sudo pfctl -a com.sentinel-lab -s rules'.")
+        return ports
+
+    def _parse_pfctl_rules(self, output: str) -> set[int]:
+        ports: set[int] = set()
+        for line in output.splitlines():
+            if not self._PF_BLOCK_LINE.search(line):
+                continue
+            matched_on_line = False
+            for port_match in self._PF_PORT_CLAUSE.finditer(line):
+                blob = port_match.group(1) or port_match.group(2) or ""
+                for token in re.split(r"[,\s]+", blob):
+                    token = token.strip()
+                    if not token:
+                        continue
+                    if ":" in token or "-" in token:
+                        sep = ":" if ":" in token else "-"
+                        try:
+                            start, end = token.split(sep, 1)
+                            start_i, end_i = int(start), int(end)
+                            if 0 < start_i <= end_i <= 65535:
+                                ports.update(range(start_i, end_i + 1))
+                                matched_on_line = True
+                        except ValueError:
+                            continue
+                    else:
+                        try:
+                            value = int(token)
+                            if 0 < value <= 65535:
+                                ports.add(value)
+                                matched_on_line = True
+                        except ValueError:
+                            continue
+            if self.debug and matched_on_line:
+                print(f"[DEBUG] pfctl matched block line: {line.strip()!r}")
         return ports
 
     def _fetch_via_powershell(self) -> set[int] | None:
@@ -357,13 +413,21 @@ class NetworkScanner:
 
         is_secured = False
         secured_by = ""
-        if is_threat and port in self.blocked_ports:
+        port_int = int(port)
+        if is_threat and port_int in self.blocked_ports:
             is_secured = True
             is_threat = False
             secured_by = "Sentinel firewall rule"
+            self.logger.debug(
+                "Port %s/%s overridden THREAT->PROTECTED (matched firewall rule)",
+                port_int, kind.upper(),
+            )
             if self.debug:
-                print(f"[DEBUG] Port {port}/{kind.upper()} → PROTECTED "
+                print(f"[DEBUG] Port {port_int}/{kind.upper()} → PROTECTED "
                       f"(threat overridden by firewall rule)")
+        elif is_threat and self.debug:
+            print(f"[DEBUG] Port {port_int}/{kind.upper()} is THREAT; "
+                  f"blocked_ports={sorted(self.blocked_ports)}")
 
         return OpenPort(
             port=port,
