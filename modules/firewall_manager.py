@@ -35,6 +35,8 @@ class FirewallManager:
     def status(self) -> FirewallStatus:
         if self.os_info.is_windows:
             return self._status_windows()
+        if self.os_info.is_macos:
+            return self._status_macos()
         return self._status_linux()
 
     def block_port(self, port: int, protocol: str = "TCP") -> bool:
@@ -47,12 +49,15 @@ class FirewallManager:
                 "dir=in", "action=block",
                 f"protocol={protocol}", f"localport={port}",
             ]
-        else:
-            if not shutil.which("ufw"):
-                self.logger.error("ufw not available; cannot block port %s", port)
-                return False
-            cmd = ["ufw", "deny", f"{port}/{protocol.lower()}"]
+            return self._run_action(cmd, f"block port {port}/{protocol}")
 
+        if self.os_info.is_macos:
+            return self._block_port_macos(port, protocol)
+
+        if not shutil.which("ufw"):
+            self.logger.error("ufw not available; cannot block port %s", port)
+            return False
+        cmd = ["ufw", "deny", f"{port}/{protocol.lower()}"]
         return self._run_action(cmd, f"block port {port}/{protocol}")
 
     def block_ip(self, ip: str) -> bool:
@@ -63,17 +68,22 @@ class FirewallManager:
                 "dir=in", "action=block",
                 f"remoteip={ip}",
             ]
-        else:
-            if not shutil.which("ufw"):
-                self.logger.error("ufw not available; cannot block ip %s", ip)
-                return False
-            cmd = ["ufw", "deny", "from", ip]
+            return self._run_action(cmd, f"block ip {ip}")
 
+        if self.os_info.is_macos:
+            return self._block_ip_macos(ip)
+
+        if not shutil.which("ufw"):
+            self.logger.error("ufw not available; cannot block ip %s", ip)
+            return False
+        cmd = ["ufw", "deny", "from", ip]
         return self._run_action(cmd, f"block ip {ip}")
 
     def get_blocked_ports(self) -> list[BlockedPort]:
         if self.os_info.is_windows:
             return self._get_blocked_ports_windows()
+        if self.os_info.is_macos:
+            return self._get_blocked_ports_macos()
         return self._get_blocked_ports_linux()
 
     def _get_blocked_ports_windows(self) -> list[BlockedPort]:
@@ -211,6 +221,126 @@ class FirewallManager:
         rules = [ln for ln in output.splitlines() if ln and not ln.startswith("-P")]
         active = len(rules) > 0
         return FirewallStatus("iptables", active, output)
+
+    # ------------------------------------------------------------------
+    # macOS backend (Application Layer Firewall + pfctl)
+    # ------------------------------------------------------------------
+    _ALF_STATES = {0: "off", 1: "on (allow signed)", 2: "on (block all)"}
+    _PF_ANCHOR = "com.sentinel-lab"
+
+    def _status_macos(self) -> FirewallStatus:
+        try:
+            completed = subprocess.run(
+                ["defaults", "read", "/Library/Preferences/com.apple.alf", "globalstate"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+            self.logger.error("defaults read failed: %s", err)
+            return FirewallStatus("alf", False, str(err))
+
+        raw = (completed.stdout or "").strip()
+        output = raw or (completed.stderr or "").strip()
+
+        try:
+            state = int(raw)
+        except ValueError:
+            state = -1
+
+        active = state in (1, 2)
+        profiles = {"alf": active}
+
+        if shutil.which("pfctl"):
+            try:
+                pf_completed = subprocess.run(
+                    ["pfctl", "-s", "info"], capture_output=True, text=True,
+                    timeout=10, check=False,
+                )
+                pf_output = pf_completed.stdout or ""
+                pf_active = "Status: Enabled" in pf_output
+                profiles["pf"] = pf_active
+                active = active or pf_active
+                output = f"alf={self._ALF_STATES.get(state, 'unknown')}; pf={'on' if pf_active else 'off'}"
+            except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+                self.logger.debug("pfctl status check failed: %s", err)
+
+        return FirewallStatus("alf+pf", active, output, profiles)
+
+    def _block_port_macos(self, port: int, protocol: str) -> bool:
+        if not shutil.which("pfctl"):
+            self.logger.error("pfctl not found; cannot block port %s/%s", port, protocol)
+            return False
+        rule = f'block in quick proto {protocol.lower()} from any to any port {port}'
+        return self._apply_pf_anchor_rule(rule, f"block port {port}/{protocol}")
+
+    def _block_ip_macos(self, ip: str) -> bool:
+        if not shutil.which("pfctl"):
+            self.logger.error("pfctl not found; cannot block ip %s", ip)
+            return False
+        rule = f'block in quick from {ip} to any'
+        return self._apply_pf_anchor_rule(rule, f"block ip {ip}")
+
+    def _apply_pf_anchor_rule(self, rule: str, description: str) -> bool:
+        import tempfile
+
+        existing = self._read_pf_anchor()
+        combined = (existing + "\n" + rule).strip() + "\n"
+
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".pf", delete=False) as fh:
+                fh.write(combined)
+                tmp_path = fh.name
+        except OSError as err:
+            self.logger.error("Cannot write pf rules tempfile: %s", err)
+            return False
+
+        cmd = ["pfctl", "-a", self._PF_ANCHOR, "-f", tmp_path]
+        ok = self._run_action(cmd, description)
+        if ok:
+            self._run_action(["pfctl", "-E"], "enable pf")
+        return ok
+
+    def _read_pf_anchor(self) -> str:
+        try:
+            completed = subprocess.run(
+                ["pfctl", "-a", self._PF_ANCHOR, "-s", "rules"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            return completed.stdout or ""
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+
+    def _get_blocked_ports_macos(self) -> list[BlockedPort]:
+        if not shutil.which("pfctl"):
+            return []
+        try:
+            completed = subprocess.run(
+                ["pfctl", "-a", self._PF_ANCHOR, "-s", "rules"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+            self.logger.warning("pfctl rule enumeration failed: %s", err)
+            return []
+
+        stderr = (completed.stderr or "").lower()
+        if "permission denied" in stderr or "operation not permitted" in stderr:
+            self.logger.error("pfctl requires root privileges to list anchor rules")
+            return []
+
+        blocked: list[BlockedPort] = []
+        rule_pattern = re.compile(
+            r"block\s+in\s+quick\s+proto\s+(tcp|udp).*?port\s+(?:=\s*)?(\d+)",
+            re.IGNORECASE,
+        )
+        for line in (completed.stdout or "").splitlines():
+            match = rule_pattern.search(line)
+            if match:
+                protocol = match.group(1).upper()
+                port = int(match.group(2))
+                blocked.append(BlockedPort(
+                    port=port, protocol=protocol,
+                    rule_name=f"{self._PF_ANCHOR}/{port}",
+                ))
+        return blocked
 
     def _run_action(self, cmd: list[str], description: str) -> bool:
         self.logger.info("Executing firewall action: %s | cmd=%s", description, cmd)

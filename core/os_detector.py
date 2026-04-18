@@ -20,15 +20,30 @@ class OSInfo:
     def is_linux(self) -> bool:
         return self.family == "linux"
 
+    @property
+    def is_macos(self) -> bool:
+        return self.family == "macos"
+
+    @property
+    def is_unix(self) -> bool:
+        return self.family in {"linux", "macos"}
+
 
 def detect_os() -> OSInfo:
-    system = platform.system().lower()
-    if system not in {"windows", "linux"}:
+    raw = platform.system().lower()
+
+    if raw == "darwin":
+        family = "macos"
+    elif raw in {"windows", "linux"}:
+        family = raw
+    else:
         raise RuntimeError(
-            f"Unsupported OS: {platform.system()}. Sentinel-Lab supports Windows and Linux."
+            f"Unsupported OS: {platform.system()}. "
+            "Sentinel-Lab supports Windows, Linux and macOS."
         )
+
     return OSInfo(
-        family=system,
+        family=family,
         release=platform.release(),
         version=platform.version(),
         machine=platform.machine(),
@@ -51,7 +66,8 @@ def require_admin(console=None) -> None:
     msg = (
         "Sentinel-Lab requires elevated privileges.\n"
         "  - Windows: run the terminal as Administrator.\n"
-        "  - Linux:   run with sudo."
+        "  - Linux:   run with sudo.\n"
+        "  - macOS:   run with sudo."
     )
     if console is not None:
         console.print(f"[bold red]ACCESS DENIED[/bold red]\n{msg}")

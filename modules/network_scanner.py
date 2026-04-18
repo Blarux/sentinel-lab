@@ -71,7 +71,9 @@ class NetworkScanner:
         self.auto_fetch_firewall = auto_fetch_firewall
         self.debug = debug
         self.logger = get_logger("sentinel.scanner")
-        self._is_windows = platform.system().lower() == "windows"
+        system = platform.system().lower()
+        self._is_windows = system == "windows"
+        self._is_macos = system == "darwin"
 
     def scan(self, include_udp: bool = True) -> ScanResult:
         if self.auto_fetch_firewall:
@@ -116,7 +118,43 @@ class NetworkScanner:
             if ports is None:
                 ports = self._fetch_via_netsh()
             return ports or set()
+        if self._is_macos:
+            return self._fetch_via_pfctl()
         return self._fetch_via_ufw()
+
+    def _fetch_via_pfctl(self) -> set[int]:
+        if not shutil.which("pfctl"):
+            self.logger.debug("pfctl not available on this macOS system")
+            return set()
+        cmd = ["pfctl", "-a", "com.sentinel-lab", "-s", "rules"]
+        try:
+            completed = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+            self.logger.warning("pfctl query failed: %s", err)
+            return set()
+
+        stderr = (completed.stderr or "").lower()
+        if "permission denied" in stderr or "operation not permitted" in stderr:
+            self.logger.error(
+                "pfctl enumeration denied - root privileges required (use sudo)."
+            )
+            return set()
+
+        ports: set[int] = set()
+        pattern = re.compile(
+            r"block\s+in\s+quick\s+proto\s+(?:tcp|udp).*?port\s+(?:=\s*)?(\d+)",
+            re.IGNORECASE,
+        )
+        for line in (completed.stdout or "").splitlines():
+            match = pattern.search(line)
+            if match:
+                ports.add(int(match.group(1)))
+        self.logger.info("pfctl detected %d Sentinel-blocked port(s)", len(ports))
+        if self.debug:
+            print(f"[DEBUG] pfctl Sentinel ports: {sorted(ports)}")
+        return ports
 
     def _fetch_via_powershell(self) -> set[int] | None:
         if not shutil.which("powershell") and not shutil.which("powershell.exe"):

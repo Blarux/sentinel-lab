@@ -1,6 +1,6 @@
 # Sentinel-Lab
 
-Outil professionnel d'audit et de sécurisation système multi-plateforme (Windows / Linux).
+Outil professionnel d'audit et de sécurisation système multi-plateforme (Windows / Linux / macOS).
 Détecte les ports ouverts à risque, identifie les processus associés, vérifie l'état
 du pare-feu et propose des remédiations interactives.
 
@@ -26,6 +26,7 @@ du pare-feu et propose des remédiations interactives.
 | Python | 3.10+ |
 | Windows | 10 / 11 (droits Administrateur requis) |
 | Linux | kernel récent + `ufw` ou `firewalld` ou `iptables` (sudo requis) |
+| macOS | 11+ (Big Sur ou plus récent, `pfctl` natif, sudo requis) |
 | RAM | 100 MB |
 
 ---
@@ -81,8 +82,23 @@ python main.py
 sudo python3 main.py
 ```
 
+**macOS** :
+```bash
+sudo python3 main.py
+```
+
 Le script refuse de tourner sans privilèges élevés (nécessaire pour énumérer les sockets
 et interroger le pare-feu).
+
+### Notes spécifiques macOS
+
+- Le pare-feu applicatif (ALF) est lu via `defaults read /Library/Preferences/com.apple.alf globalstate` :
+  `0` = off, `1` = on (allow signed), `2` = on (block all).
+- Les règles de blocage Sentinel sont appliquées via `pfctl` dans l'anchor `com.sentinel-lab`.
+- Pour inspecter manuellement les règles Sentinel :
+  ```bash
+  sudo pfctl -a com.sentinel-lab -s rules
+  ```
 
 ### Options CLI
 

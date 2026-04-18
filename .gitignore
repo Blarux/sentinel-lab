@@ -34,3 +34,6 @@ desktop.ini
 # Secrets / config locale
 .env
 *.local.yaml
+
+# Claude
+.claude/

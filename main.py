@@ -97,8 +97,13 @@ def print_banner(console: Console) -> None:
 def print_system_panel(console: Console) -> None:
     os_info = detect_os()
     admin = "[green]YES[/green]" if is_admin() else "[red]NO[/red]"
+    pretty_family = {
+        "windows": "Windows",
+        "linux": "Linux",
+        "macos": "macOS (Darwin)",
+    }.get(os_info.family, os_info.family)
     content = (
-        f"OS family   : [bold]{os_info.family}[/bold]\n"
+        f"OS family   : [bold]{pretty_family}[/bold]\n"
         f"Release     : {os_info.release}\n"
         f"Machine     : {os_info.machine}\n"
         f"Privileges  : {admin}"
@@ -333,7 +338,8 @@ def main(argv: list[str] | None = None) -> int:
                 "  • Apply remediation actions\n\n"
                 "Please restart as:\n"
                 "  Windows: Right-click → Run as Administrator\n"
-                "  Linux  : sudo python main.py",
+                "  Linux  : sudo python3 main.py\n"
+                "  macOS  : sudo python3 main.py",
                 border_style="red",
                 title="ACCESS DENIED",
             )
